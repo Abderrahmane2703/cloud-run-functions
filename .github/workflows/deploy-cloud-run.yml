@@ -1,12 +1,11 @@
-﻿name: Deploy Cloud Run Functions
+name: Deploy Cloud Run Functions
 
 on:
   push:
     branches:
       - main
     paths:
-      - 'watch-query-function/**'
-      - 'renewal-worker-function/**'
+      - 'cloud-run-functions/**'
   workflow_dispatch:
 
 jobs:
@@ -24,10 +23,10 @@ jobs:
       - name: Set up Cloud SDK
         uses: google-github-actions/setup-gcloud@v2
 
-      - name: Deploy Watch Query Function
+      - name: Deploy Watch Query Function (HTTP Trigger for Cloud Scheduler)
         run: |
           gcloud run deploy watch-query-function \
-            --source=./watch-query-function \
+            --source=./cloud-run-functions/watch-query-function \
             --region=us-central1 \
             --platform=managed \
             --allow-unauthenticated \
@@ -51,15 +50,24 @@ jobs:
       - name: Set up Cloud SDK
         uses: google-github-actions/setup-gcloud@v2
 
-      - name: Deploy Renewal Worker Function
+      - name: Deploy Renewal Worker Function (Pub/Sub Trigger)
         run: |
           gcloud run deploy renewal-worker-function \
-            --source=./renewal-worker-function \
+            --source=./cloud-run-functions/renewal-worker-function \
             --region=us-central1 \
             --platform=managed \
-            --allow-unauthenticated \
-            --set-env-vars="GCP_PROJECT_ID=${{ secrets.GCP_PROJECT_ID }},GCP_PUB_SUB_EMAIL_REPLY_TOPIC_ID=${{ secrets.GCP_PUB_SUB_EMAIL_REPLY_TOPIC_ID }},DATABASE_URL=${{ secrets.DATABASE_URL }},GOOGLE_CLIENT_ID=${{ secrets.GOOGLE_CLIENT_ID }},GOOGLE_CLIENT_SECRET=${{ secrets.GOOGLE_CLIENT_SECRET }}" \
+            --no-allow-unauthenticated \
+            --set-env-vars="GCP_PROJECT_ID=${{ secrets.GCP_PROJECT_ID }},DATABASE_URL=${{ secrets.DATABASE_URL }},GOOGLE_CLIENT_ID=${{ secrets.GOOGLE_CLIENT_ID }},GOOGLE_CLIENT_SECRET=${{ secrets.GOOGLE_CLIENT_SECRET }}" \
             --memory=512Mi \
             --cpu=1 \
             --timeout=300 \
             --max-instances=10
+
+      - name: Create Pub/Sub Trigger for Renewal Worker Function
+        run: |
+          # Create Pub/Sub subscription that triggers the Cloud Run service
+          gcloud pubsub subscriptions create renewal-worker-subscription \
+            --topic=${{ secrets.GCP_PUB_SUB_GMAIL_WATCH_RENEWAL_TOPIC_ID }} \
+            --push-endpoint=https://renewal-worker-function-$(gcloud config get-value project | tr ':' '-' | tr '.' '-')-uc.a.run.app \
+            --push-auth-service-account=dev-talentino-sa@${{ secrets.GCP_PROJECT_ID }}.iam.gserviceaccount.com \
+            --region=us-central1 || echo "Subscription already exists"
