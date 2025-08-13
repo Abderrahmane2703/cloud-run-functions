@@ -18,9 +18,9 @@ def watch_query_function(request):
     Triggered by Cloud Scheduler via HTTP
     
     This function:
-    1. Queries database for Gmail watches expiring within 2 hours
+    1. Queries database for Gmail watches expiring within 1 day (24 hours)
     2. Publishes renewal messages to Pub/Sub topic
-    3. Returns operation summary
+    3. Returns operation summary with account expiration details
     """
     try:
         logger.info("Gmail watch query function triggered by Cloud Scheduler")
@@ -33,19 +33,27 @@ def watch_query_function(request):
         if not all([project_id, topic_id, database_url]):
             raise ValueError("Missing required environment variables")
         
-        # Query expiring watches
-        expiring_watches = get_expiring_watches(database_url)
+        # Query expiring watches (within 24 hours)
+        expiring_watches = get_expiring_watches(database_url, hours_ahead=24)
         
         if not expiring_watches:
-            logger.info("No expiring Gmail watches found")
+            logger.info("No Gmail watches expiring within 24 hours found")
             return {
                 'statusCode': 200,
                 'body': json.dumps({
                     'success': True,
-                    'message': 'No expiring watches found',
+                    'message': 'No watches expiring within 24 hours found',
                     'watches_processed': 0
                 })
             }
+        
+        # Log accounts approaching expiration
+        for watch in expiring_watches:
+            expiration_time = datetime.fromisoformat(watch['expiration_time'].replace('Z', '+00:00'))
+            time_until_expiry = expiration_time - datetime.utcnow().replace(tzinfo=expiration_time.tzinfo)
+            hours_remaining = time_until_expiry.total_seconds() / 3600
+            
+            logger.warning(f"Account {watch['email']} (user_id: {watch['user_id']}) has Gmail watch expiring in {hours_remaining:.1f} hours at {watch['expiration_time']}")
         
         # Publish renewal messages to Pub/Sub
         published_count = publish_renewal_messages(project_id, topic_id, expiring_watches)
@@ -71,13 +79,13 @@ def watch_query_function(request):
             })
         }
 
-def get_expiring_watches(database_url, hours_ahead=2):
+def get_expiring_watches(database_url, hours_ahead=24):
     """
     Query database for Gmail watches expiring within specified hours
     
     Args:
         database_url (str): PostgreSQL connection string
-        hours_ahead (int): Hours ahead to check for expiring watches
+        hours_ahead (int): Hours ahead to check for expiring watches (default: 24 hours)
     
     Returns:
         list: List of expiring watch records
