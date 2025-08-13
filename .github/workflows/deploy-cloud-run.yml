@@ -34,7 +34,8 @@ jobs:
             --memory=512Mi \
             --cpu=1 \
             --timeout=300 \
-            --max-instances=10
+            --max-instances=10 \
+            --replace
 
   deploy-renewal-worker-function:
     runs-on: ubuntu-latest
@@ -50,6 +51,12 @@ jobs:
       - name: Set up Cloud SDK
         uses: google-github-actions/setup-gcloud@v2
 
+      - name: Debug - List files
+        run: |
+          pwd
+          ls -la
+          ls -la cloud-run-functions/ || echo "cloud-run-functions directory not found"
+
       - name: Deploy Renewal Worker Function (Pub/Sub Trigger)
         run: |
           gcloud run deploy renewal-worker-function \
@@ -61,7 +68,8 @@ jobs:
             --memory=512Mi \
             --cpu=1 \
             --timeout=300 \
-            --max-instances=10
+            --max-instances=10 \
+            --replace
 
       - name: Create Pub/Sub Trigger for Renewal Worker Function
         run: |
