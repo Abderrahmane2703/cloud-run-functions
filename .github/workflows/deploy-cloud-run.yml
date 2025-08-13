@@ -1,0 +1,65 @@
+﻿name: Deploy Cloud Run Functions
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'watch-query-function/**'
+      - 'renewal-worker-function/**'
+  workflow_dispatch:
+
+jobs:
+  deploy-watch-query-function:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Deploy Watch Query Function
+        run: |
+          gcloud run deploy watch-query-function \
+            --source=./watch-query-function \
+            --region=us-central1 \
+            --platform=managed \
+            --allow-unauthenticated \
+            --set-env-vars="GCP_PROJECT_ID=${{ secrets.GCP_PROJECT_ID }},GCP_PUB_SUB_GMAIL_WATCH_RENEWAL_TOPIC_ID=${{ secrets.GCP_PUB_SUB_GMAIL_WATCH_RENEWAL_TOPIC_ID }},DATABASE_URL=${{ secrets.DATABASE_URL }}" \
+            --memory=512Mi \
+            --cpu=1 \
+            --timeout=300 \
+            --max-instances=10
+
+  deploy-renewal-worker-function:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Deploy Renewal Worker Function
+        run: |
+          gcloud run deploy renewal-worker-function \
+            --source=./renewal-worker-function \
+            --region=us-central1 \
+            --platform=managed \
+            --allow-unauthenticated \
+            --set-env-vars="GCP_PROJECT_ID=${{ secrets.GCP_PROJECT_ID }},GCP_PUB_SUB_EMAIL_REPLY_TOPIC_ID=${{ secrets.GCP_PUB_SUB_EMAIL_REPLY_TOPIC_ID }},DATABASE_URL=${{ secrets.DATABASE_URL }},GOOGLE_CLIENT_ID=${{ secrets.GOOGLE_CLIENT_ID }},GOOGLE_CLIENT_SECRET=${{ secrets.GOOGLE_CLIENT_SECRET }}" \
+            --memory=512Mi \
+            --cpu=1 \
+            --timeout=300 \
+            --max-instances=10
