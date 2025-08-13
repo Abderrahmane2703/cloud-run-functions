@@ -24,16 +24,6 @@ jobs:
       - name: Set up Cloud SDK
         uses: google-github-actions/setup-gcloud@v2
 
-      - name: Configure Cloud Build permissions
-        run: |
-          PROJECT_NUMBER=$(gcloud projects describe ${{ secrets.GCP_PROJECT_ID }} --format="value(projectNumber)")
-          gcloud projects add-iam-policy-binding ${{ secrets.GCP_PROJECT_ID }} \
-            --member="serviceAccount:${PROJECT_NUMBER}@cloudbuild.gserviceaccount.com" \
-            --role="roles/run.admin"
-          gcloud projects add-iam-policy-binding ${{ secrets.GCP_PROJECT_ID }} \
-            --member="serviceAccount:${PROJECT_NUMBER}@cloudbuild.gserviceaccount.com" \
-            --role="roles/iam.serviceAccountUser"
-
       - name: Deploy Watch Query Function (HTTP Trigger for Cloud Scheduler)
         run: |
           gcloud run deploy watch-query-function \
@@ -41,7 +31,7 @@ jobs:
             --region=us-central1 \
             --platform=managed \
             --allow-unauthenticated \
-            --service-account=dev-talentino-sa@${{ secrets.GCP_PROJECT_ID }}.iam.gserviceaccount.com \
+            --build-service-account=dev-talentino-sa@${{ secrets.GCP_PROJECT_ID }}.iam.gserviceaccount.com \
             --set-env-vars="GCP_PROJECT_ID=${{ secrets.GCP_PROJECT_ID }},GCP_PUB_SUB_GMAIL_WATCH_RENEWAL_TOPIC_ID=${{ secrets.GCP_PUB_SUB_GMAIL_WATCH_RENEWAL_TOPIC_ID }},DATABASE_URL=${{ secrets.DATABASE_URL }}" \
             --memory=512Mi \
             --cpu=1 \
@@ -63,16 +53,6 @@ jobs:
       - name: Set up Cloud SDK
         uses: google-github-actions/setup-gcloud@v2
 
-      - name: Configure Cloud Build permissions
-        run: |
-          PROJECT_NUMBER=$(gcloud projects describe ${{ secrets.GCP_PROJECT_ID }} --format="value(projectNumber)")
-          gcloud projects add-iam-policy-binding ${{ secrets.GCP_PROJECT_ID }} \
-            --member="serviceAccount:${PROJECT_NUMBER}@cloudbuild.gserviceaccount.com" \
-            --role="roles/run.admin"
-          gcloud projects add-iam-policy-binding ${{ secrets.GCP_PROJECT_ID }} \
-            --member="serviceAccount:${PROJECT_NUMBER}@cloudbuild.gserviceaccount.com" \
-            --role="roles/iam.serviceAccountUser"
-
       - name: Debug - List files
         run: |
           pwd
@@ -86,7 +66,7 @@ jobs:
             --region=us-central1 \
             --platform=managed \
             --no-allow-unauthenticated \
-            --service-account=dev-talentino-sa@${{ secrets.GCP_PROJECT_ID }}.iam.gserviceaccount.com \
+            --build-service-account=dev-talentino-sa@${{ secrets.GCP_PROJECT_ID }}.iam.gserviceaccount.com \
             --set-env-vars="GCP_PROJECT_ID=${{ secrets.GCP_PROJECT_ID }},DATABASE_URL=${{ secrets.DATABASE_URL }},GOOGLE_CLIENT_ID=${{ secrets.GOOGLE_CLIENT_ID }},GOOGLE_CLIENT_SECRET=${{ secrets.GOOGLE_CLIENT_SECRET }}" \
             --memory=512Mi \
             --cpu=1 \
