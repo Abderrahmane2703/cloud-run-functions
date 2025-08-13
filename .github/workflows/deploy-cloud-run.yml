@@ -5,7 +5,7 @@ on:
     branches:
       - main
     paths:
-      - 'cloud-run-functions/**'
+      - '**'
   workflow_dispatch:
 
 jobs:
@@ -26,7 +26,7 @@ jobs:
       - name: Deploy Watch Query Function (HTTP Trigger for Cloud Scheduler)
         run: |
           gcloud run deploy watch-query-function \
-            --source=./cloud-run-functions/watch-query-function \
+            --source=./watch-query-function \
             --region=us-central1 \
             --platform=managed \
             --allow-unauthenticated \
@@ -55,12 +55,12 @@ jobs:
         run: |
           pwd
           ls -la
-          ls -la cloud-run-functions/ || echo "cloud-run-functions directory not found"
+          ls -la ./ || echo "Directory listing completed"
 
       - name: Deploy Renewal Worker Function (Pub/Sub Trigger)
         run: |
           gcloud run deploy renewal-worker-function \
-            --source=./cloud-run-functions/renewal-worker-function \
+            --source=./renewal-worker-function \
             --region=us-central1 \
             --platform=managed \
             --no-allow-unauthenticated \
