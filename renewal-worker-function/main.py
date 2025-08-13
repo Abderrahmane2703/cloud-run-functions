@@ -75,7 +75,8 @@ def renew_gmail_watch(access_token, refresh_token):
         client_id = os.getenv('GOOGLE_CLIENT_ID')
         client_secret = os.getenv('GOOGLE_CLIENT_SECRET')
         
-        if not all([project_id, email_reply_topic, client_id, client_secret]):
+        # Check required variables (email_reply_topic is optional)
+        if not all([project_id, client_id, client_secret]):
             raise ValueError("Missing required environment variables")
         
         # Create Gmail API client
@@ -93,15 +94,19 @@ def renew_gmail_watch(access_token, refresh_token):
         
         service = build('gmail', 'v1', credentials=credentials)
         
-        # Construct the topic name
-        topic_name = f"projects/{project_id}/topics/{email_reply_topic}"
-        
-        # Setup watch request
+        # Setup watch request - only include topic if provided
         watch_request = {
-            'topicName': topic_name,
             'labelIds': ['INBOX'],
             'labelFilterAction': 'include'
         }
+        
+        # Add topic only if email_reply_topic is provided
+        if email_reply_topic:
+            topic_name = f"projects/{project_id}/topics/{email_reply_topic}"
+            watch_request['topicName'] = topic_name
+            logger.info(f"Setting up Gmail watch with topic: {topic_name}")
+        else:
+            logger.info("Setting up Gmail watch without topic (expiration monitoring only)")
         
         # Call the Gmail API watch method
         result = service.users().watch(userId='me', body=watch_request).execute()
