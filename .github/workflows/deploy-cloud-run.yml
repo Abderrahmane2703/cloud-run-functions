@@ -1,24 +1,25 @@
-name: Deploy Gmail Watch Renewal System
+name: Deploy Gmail Watch Renewal Functions
 
 on:
   push:
     branches: [main]
-    paths: ['functions/**']
+    paths: 
+      - 'watch-query-function/**'
+      - 'renewal-worker-function/**'
   workflow_dispatch:
 
 env:
   PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
   REGION: us-central1
   SERVICE_ACCOUNT: dev-talentino-sa@${{ secrets.GCP_PROJECT_ID }}.iam.gserviceaccount.com
-  TOPIC_ID: ${{ secrets.GCP_PUB_SUB_GMAIL_WATCH_RENEWAL_TOPIC_ID }}
 
 jobs:
-  deploy-gmail-renewal-system:
-    name: Deploy Gmail Watch Renewal System
+  setup:
     runs-on: ubuntu-latest
-    
+    outputs:
+      project-id: ${{ steps.setup.outputs.project-id }}
     steps:
-      - name: Checkout Repository
+      - name: Checkout code
         uses: actions/checkout@v4
 
       - name: Authenticate to Google Cloud
@@ -28,131 +29,198 @@ jobs:
 
       - name: Set up Cloud SDK
         uses: google-github-actions/setup-gcloud@v2
+
+      - name: Verify project setup
+        id: setup
+        run: |
+          PROJECT_ID=$(gcloud config get-value project)
+          echo "project-id=$PROJECT_ID" >> $GITHUB_OUTPUT
+          echo "✅ Authenticated to project: $PROJECT_ID"
+          
+          # Verify source directories exist
+          echo "📁 Checking source directories..."
+          ls -la watch-query-function/ || echo "❌ watch-query-function/ directory not found"
+          ls -la renewal-worker-function/ || echo "❌ renewal-worker-function/ directory not found"
+
+  deploy-coordinator:
+    runs-on: ubuntu-latest
+    needs: setup
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
         with:
-          version: latest
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
 
-      - name: Verify Project Configuration
-        run: |
-          echo "Project ID: $PROJECT_ID"
-          echo "Region: $REGION"
-          echo "Service Account: $SERVICE_ACCOUNT"
-          gcloud config set project $PROJECT_ID
-
-      - name: Verify Directory Structure
-        run: |
-          echo "Current directory structure:"
-          find . -type d -name "*function*" 2>/dev/null || echo "No function directories found"
-          ls -la functions/ 2>/dev/null || echo "Creating functions directory..."
-          mkdir -p functions/coordinator functions/worker
-
-      - name: Create Pub/Sub Topic (if not exists)
-        run: |
-          gcloud pubsub topics describe $TOPIC_ID || \
-          gcloud pubsub topics create $TOPIC_ID
-          echo "✅ Pub/Sub topic ready: $TOPIC_ID"
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
 
       - name: Deploy Coordinator Function
         run: |
-          echo "🚀 Deploying Coordinator Function..."
+          echo "🚀 Deploying Gmail Watch Coordinator..."
           gcloud run deploy gmail-coordinator \
-            --source=./functions/coordinator \
-            --region=$REGION \
+            --source=./watch-query-function \
+            --region=${{ env.REGION }} \
             --platform=managed \
             --allow-unauthenticated \
-            --service-account=$SERVICE_ACCOUNT \
+            --service-account=${{ env.SERVICE_ACCOUNT }} \
             --memory=512Mi \
             --cpu=1 \
             --timeout=300s \
             --max-instances=5 \
-            --min-instances=0 \
-            --set-env-vars="PROJECT_ID=$PROJECT_ID,TOPIC_ID=$TOPIC_ID,DATABASE_URL=${{ secrets.DATABASE_URL }}"
-          
-          echo "✅ Coordinator deployed successfully"
+            --set-env-vars="PROJECT_ID=${{ env.PROJECT_ID }},RENEWAL_TOPIC=${{ secrets.GCP_PUB_SUB_GMAIL_WATCH_RENEWAL_TOPIC_ID }},DATABASE_URL=${{ secrets.DATABASE_URL }}"
 
-      - name: Deploy Worker Function  
+      - name: Get Coordinator URL
+        id: coordinator-url
         run: |
-          echo "🚀 Deploying Worker Function..."
+          URL=$(gcloud run services describe gmail-coordinator --region=${{ env.REGION }} --format='value(status.url)')
+          echo "coordinator-url=$URL" >> $GITHUB_OUTPUT
+          echo "✅ Coordinator deployed at: $URL"
+
+  deploy-worker:
+    runs-on: ubuntu-latest
+    needs: setup
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Deploy Worker Function
+        run: |
+          echo "🚀 Deploying Gmail Renewal Worker..."
           gcloud run deploy gmail-worker \
-            --source=./functions/worker \
-            --region=$REGION \
+            --source=./renewal-worker-function \
+            --region=${{ env.REGION }} \
             --platform=managed \
             --no-allow-unauthenticated \
-            --service-account=$SERVICE_ACCOUNT \
-            --memory=1Gi \
+            --service-account=${{ env.SERVICE_ACCOUNT }} \
+            --memory=512Mi \
             --cpu=1 \
-            --timeout=540s \
-            --max-instances=50 \
-            --min-instances=0 \
-            --set-env-vars="PROJECT_ID=$PROJECT_ID,DATABASE_URL=${{ secrets.DATABASE_URL }}"
-          
-          echo "✅ Worker deployed successfully"
+            --timeout=300s \
+            --max-instances=20 \
+            --set-env-vars="PROJECT_ID=${{ env.PROJECT_ID }},DATABASE_URL=${{ secrets.DATABASE_URL }},GOOGLE_CLIENT_ID=${{ secrets.GOOGLE_CLIENT_ID }},GOOGLE_CLIENT_SECRET=${{ secrets.GOOGLE_CLIENT_SECRET }}"
 
-      - name: Get Worker Service URL
-        id: get-worker-url
+      - name: Get Worker URL
+        id: worker-url
         run: |
-          WORKER_URL=$(gcloud run services describe gmail-worker \
-            --region=$REGION \
-            --format='value(status.url)')
-          echo "worker_url=$WORKER_URL" >> $GITHUB_OUTPUT
-          echo "Worker URL: $WORKER_URL"
+          URL=$(gcloud run services describe gmail-worker --region=${{ env.REGION }} --format='value(status.url)')
+          echo "worker-url=$URL" >> $GITHUB_OUTPUT
+          echo "✅ Worker deployed at: $URL"
 
-      - name: Setup Pub/Sub Push Subscription
+  setup-pubsub:
+    runs-on: ubuntu-latest
+    needs: [setup, deploy-worker]
+    steps:
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Create Pub/Sub Topic
         run: |
-          echo "🔗 Setting up Pub/Sub subscription..."
+          echo "📡 Setting up Pub/Sub infrastructure..."
           
-          # Delete existing subscription if it exists
-          gcloud pubsub subscriptions delete gmail-worker-subscription \
-            --quiet 2>/dev/null || echo "No existing subscription to delete"
+          # Create topic if it doesn't exist
+          gcloud pubsub topics create ${{ secrets.GCP_PUB_SUB_GMAIL_WATCH_RENEWAL_TOPIC_ID }} \
+            --project=${{ env.PROJECT_ID }} || echo "ℹ️ Topic already exists"
+
+      - name: Create Pub/Sub Subscription
+        run: |
+          # Get worker service URL
+          WORKER_URL=$(gcloud run services describe gmail-worker --region=${{ env.REGION }} --format='value(status.url)')
           
-          # Create new push subscription
-          gcloud pubsub subscriptions create gmail-worker-subscription \
-            --topic=$TOPIC_ID \
-            --push-endpoint="${{ steps.get-worker-url.outputs.worker_url }}/" \
+          echo "🔗 Creating subscription with endpoint: $WORKER_URL"
+          
+          # Create subscription with retry policy
+          gcloud pubsub subscriptions create gmail-renewal-subscription \
+            --topic=${{ secrets.GCP_PUB_SUB_GMAIL_WATCH_RENEWAL_TOPIC_ID }} \
+            --push-endpoint="$WORKER_URL" \
             --ack-deadline=600 \
             --max-delivery-attempts=5 \
             --min-retry-delay=10s \
-            --max-retry-delay=300s
-          
-          echo "✅ Pub/Sub subscription created successfully"
+            --max-retry-delay=300s \
+            --project=${{ env.PROJECT_ID }} || echo "ℹ️ Subscription already exists"
 
-      - name: Get Coordinator Service URL
-        id: get-coordinator-url
-        run: |
-          COORDINATOR_URL=$(gcloud run services describe gmail-coordinator \
-            --region=$REGION \
-            --format='value(status.url)')
-          echo "coordinator_url=$COORDINATOR_URL" >> $GITHUB_OUTPUT
-          echo "📋 Coordinator URL: $COORDINATOR_URL"
+  create-scheduler:
+    runs-on: ubuntu-latest
+    needs: [setup, deploy-coordinator]
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[setup-scheduler]')
+    steps:
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
 
-      - name: Verify Deployment Health
-        run: |
-          echo "🔍 Verifying deployment health..."
-          
-          # Check if services are ready
-          gcloud run services describe gmail-coordinator --region=$REGION \
-            --format='value(status.conditions[0].status)' | grep True
-          
-          gcloud run services describe gmail-worker --region=$REGION \
-            --format='value(status.conditions[0].status)' | grep True
-          
-          # Verify Pub/Sub subscription
-          gcloud pubsub subscriptions describe gmail-worker-subscription \
-            --format='value(name)'
-          
-          echo "✅ All services deployed and healthy!"
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
 
-      - name: Deployment Summary
+      - name: Create Cloud Scheduler Job
         run: |
-          echo "📊 DEPLOYMENT SUMMARY"
-          echo "===================="
-          echo "✅ Coordinator URL: ${{ steps.get-coordinator-url.outputs.coordinator_url }}"
-          echo "✅ Worker URL: ${{ steps.get-worker-url.outputs.worker_url }}"
-          echo "✅ Pub/Sub Topic: $TOPIC_ID"
-          echo "✅ Pub/Sub Subscription: gmail-worker-subscription"
-          echo "✅ Region: $REGION"
-          echo "✅ Service Account: $SERVICE_ACCOUNT"
+          echo "⏰ Creating scheduled renewal job..."
+          
+          # Get coordinator service URL
+          COORDINATOR_URL=$(gcloud run services describe gmail-coordinator --region=${{ env.REGION }} --format='value(status.url)')
+          
+          # Create scheduler job (runs daily at 2 AM UTC)
+          gcloud scheduler jobs create http gmail-daily-renewal \
+            --location=${{ env.REGION }} \
+            --schedule="0 2 * * *" \
+            --uri="$COORDINATOR_URL" \
+            --http-method=POST \
+            --headers="Content-Type=application/json" \
+            --message-body='{"trigger":"scheduled","timestamp":"'$(date -u +%s)'"}' \
+            --time-zone="UTC" \
+            --max-retry-attempts=3 \
+            --min-backoff-duration=30s \
+            --max-backoff-duration=300s \
+            --oidc-service-account-email=${{ env.SERVICE_ACCOUNT }} || echo "ℹ️ Scheduler job already exists"
+
+  verify-deployment:
+    runs-on: ubuntu-latest
+    needs: [deploy-coordinator, deploy-worker, setup-pubsub]
+    steps:
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Verify Deployment
+        run: |
+          echo "🔍 Verifying deployment..."
+          
+          # Check coordinator service
+          COORDINATOR_STATUS=$(gcloud run services describe gmail-coordinator --region=${{ env.REGION }} --format='value(status.conditions[0].status)')
+          echo "📋 Coordinator status: $COORDINATOR_STATUS"
+          
+          # Check worker service  
+          WORKER_STATUS=$(gcloud run services describe gmail-worker --region=${{ env.REGION }} --format='value(status.conditions[0].status)')
+          echo "🔧 Worker status: $WORKER_STATUS"
+          
+          # Check Pub/Sub setup
+          gcloud pubsub topics describe ${{ secrets.GCP_PUB_SUB_GMAIL_WATCH_RENEWAL_TOPIC_ID }} --project=${{ env.PROJECT_ID }} > /dev/null
+          echo "📡 Pub/Sub topic: ✅"
+          
+          gcloud pubsub subscriptions describe gmail-renewal-subscription --project=${{ env.PROJECT_ID }} > /dev/null
+          echo "🔗 Pub/Sub subscription: ✅"
+          
           echo ""
-          echo "🎯 Next steps:"
-          echo "1. Create Cloud Scheduler job to trigger: ${{ steps.get-coordinator-url.outputs.coordinator_url }}"
-          echo "2. Set up your database with gmail_watches collection"
-          echo "3. Configure Gmail API credentials in your service account"
+          echo "🎉 Deployment Summary:"
+          echo "├── Coordinator: $(gcloud run services describe gmail-coordinator --region=${{ env.REGION }} --format='value(status.url)')"
+          echo "├── Worker: $(gcloud run services describe gmail-worker --region=${{ env.REGION }} --format='value(status.url)')"
+          echo "├── Topic: ${{ secrets.GCP_PUB_SUB_GMAIL_WATCH_RENEWAL_TOPIC_ID }}"
+          echo "└── Region: ${{ env.REGION }}"
